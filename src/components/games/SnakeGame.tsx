@@ -1,7 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Play, RotateCcw, Trophy, Pause } from "lucide-react";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Play, RotateCcw, Trophy, Pause, Volume2, VolumeX } from "lucide-react";
+import { useSoundEffects } from "@/hooks/useSoundEffects";
+import { useAchievements } from "@/hooks/useAchievements";
+import { ParticleExplosion, AchievementNotification, WinCelebration } from "@/components/effects/ParticleEffects";
 
 const GRID_SIZE = 20;
 const CELL_SIZE = 16;
@@ -26,9 +29,19 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
     return saved ? parseInt(saved, 10) : 0;
   });
   const [speed, setSpeed] = useState(INITIAL_SPEED);
+  const [showWinCelebration, setShowWinCelebration] = useState(false);
+  const [showCoinEffect, setShowCoinEffect] = useState(false);
+  const [coinPosition, setCoinPosition] = useState({ x: 50, y: 50 });
+  const [isMuted, setIsMuted] = useState(false);
   
   const gameLoopRef = useRef<NodeJS.Timeout | null>(null);
   const directionRef = useRef(direction);
+
+  // Sound effects
+  const { play, toggleMute } = useSoundEffects();
+  
+  // Achievements
+  const { trackGamePlayed, recentUnlock, clearRecentUnlock } = useAchievements();
 
   const generateFood = useCallback((currentSnake: Position[]): Position => {
     let newFood: Position;
@@ -50,22 +63,46 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
     setScore(0);
     setSpeed(INITIAL_SPEED);
     setGameState("idle");
+    setShowWinCelebration(false);
   }, [generateFood]);
 
   const startGame = () => {
     if (gameState === "idle" || gameState === "gameover") {
       resetGame();
       setGameState("playing");
+      play('countdown');
     } else if (gameState === "paused") {
       setGameState("playing");
+      play('click');
     }
   };
 
   const pauseGame = () => {
     if (gameState === "playing") {
       setGameState("paused");
+      play('click');
     }
   };
+
+  const handleGameOver = useCallback((finalScore: number) => {
+    setGameState("gameover");
+    
+    // Check for new high score
+    const isNewHighScore = finalScore > highScore;
+    if (isNewHighScore) {
+      setHighScore(finalScore);
+      localStorage.setItem("snake-highscore", finalScore.toString());
+      setShowWinCelebration(true);
+      play('win');
+    } else {
+      play('gameOver');
+    }
+    
+    // Track game and check achievements
+    trackGamePlayed('snake', isNewHighScore, { score: finalScore });
+    
+    onGameEnd?.(finalScore);
+  }, [highScore, play, trackGamePlayed, onGameEnd]);
 
   const moveSnake = useCallback(() => {
     if (gameState !== "playing") return;
@@ -92,23 +129,13 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
 
       // Check wall collision
       if (newHead.x < 0 || newHead.x >= GRID_SIZE || newHead.y < 0 || newHead.y >= GRID_SIZE) {
-        setGameState("gameover");
-        if (score > highScore) {
-          setHighScore(score);
-          localStorage.setItem("snake-highscore", score.toString());
-        }
-        onGameEnd?.(score);
+        handleGameOver(score);
         return prevSnake;
       }
 
       // Check self collision
       if (prevSnake.some(segment => segment.x === newHead.x && segment.y === newHead.y)) {
-        setGameState("gameover");
-        if (score > highScore) {
-          setHighScore(score);
-          localStorage.setItem("snake-highscore", score.toString());
-        }
-        onGameEnd?.(score);
+        handleGameOver(score);
         return prevSnake;
       }
 
@@ -116,13 +143,28 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
 
       // Check food collision
       if (newHead.x === food.x && newHead.y === food.y) {
+        play('coin');
+        
+        // Show particle effect at food position
+        setCoinPosition({
+          x: (food.x / GRID_SIZE) * 100,
+          y: (food.y / GRID_SIZE) * 100,
+        });
+        setShowCoinEffect(true);
+        setTimeout(() => setShowCoinEffect(false), 500);
+        
         setScore(prev => {
           const newScore = prev + 10;
           onScoreUpdate?.(newScore);
+          
+          // Power-up sound for milestones
+          if (newScore % 50 === 0) {
+            play('powerup');
+          }
+          
           return newScore;
         });
         setFood(generateFood(newSnake));
-        // Speed up slightly
         setSpeed(prev => Math.max(50, prev - 2));
       } else {
         newSnake.pop();
@@ -130,7 +172,7 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
 
       return newSnake;
     });
-  }, [gameState, food, score, highScore, generateFood, onScoreUpdate, onGameEnd]);
+  }, [gameState, food, score, generateFood, onScoreUpdate, handleGameOver, play]);
 
   // Handle keyboard input
   useEffect(() => {
@@ -173,12 +215,13 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
       if (newDirection) {
         directionRef.current = newDirection;
         setDirection(newDirection);
+        play('move');
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [gameState]);
+  }, [gameState, play]);
 
   // Game loop
   useEffect(() => {
@@ -200,11 +243,29 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
     if (currentDir !== opposites[newDir]) {
       directionRef.current = newDir;
       setDirection(newDir);
+      play('move');
     }
+  };
+
+  const handleToggleMute = () => {
+    setIsMuted(!isMuted);
+    toggleMute();
   };
 
   return (
     <div className="flex flex-col items-center gap-6">
+      {/* Achievement Notification */}
+      <AchievementNotification 
+        achievement={recentUnlock} 
+        onClose={clearRecentUnlock} 
+      />
+      
+      {/* Win Celebration */}
+      <WinCelebration 
+        isActive={showWinCelebration} 
+        onComplete={() => setShowWinCelebration(false)} 
+      />
+
       {/* Score Display */}
       <div className="flex items-center gap-8">
         <div className="text-center">
@@ -217,10 +278,29 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
           </p>
           <p className="font-pixel text-2xl text-neon-yellow">{highScore}</p>
         </div>
+        <Button 
+          variant="ghost" 
+          size="icon" 
+          onClick={handleToggleMute}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          {isMuted ? <VolumeX className="w-5 h-5" /> : <Volume2 className="w-5 h-5" />}
+        </Button>
       </div>
 
       {/* Game Board */}
       <div className="relative">
+        {/* Coin particle effect */}
+        <ParticleExplosion
+          isActive={showCoinEffect}
+          type="firework"
+          duration={500}
+          particleCount={15}
+          colors={['#00f5ff', '#22c55e', '#f59e0b']}
+          originX={coinPosition.x}
+          originY={coinPosition.y}
+        />
+        
         <div
           className="relative bg-background border-2 border-primary/30 rounded-lg overflow-hidden"
           style={{
@@ -327,7 +407,7 @@ export function SnakeGame({ onScoreUpdate, onGameEnd }: SnakeGameProps) {
                     initial={{ y: 10, opacity: 0 }}
                     animate={{ y: 0, opacity: 1 }}
                   >
-                    NEW HIGH SCORE!
+                    🏆 NEW HIGH SCORE!
                   </motion.p>
                 )}
                 <Button variant="neon-green" onClick={resetGame} className="gap-2 mt-2">
