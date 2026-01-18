@@ -2,7 +2,7 @@
 
 **The Fastest Game Station in Web3** - Built on Linera blockchain
 
-## 🎯 Features
+## 🎯 Features  
 - **4 Games**: Snake, Tic-Tac-Toe, Snake & Ladders, UNO
 - **On-Chain Leaderboards**: Provably fair rankings
 - **Real-Time Multiplayer**: Sub-0.5s finality
